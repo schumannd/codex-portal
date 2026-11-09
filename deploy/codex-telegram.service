@@ -1,0 +1,30 @@
+[Unit]
+Description=PyDavid Telegram Codex assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codexportal
+Group=codexportal
+WorkingDirectory=/opt/codex-portal
+EnvironmentFile=/etc/codex-telegram.env
+Environment=HOME=/var/lib/codex-portal
+Environment=DATA_DIR=/var/lib/codex-portal/data
+ExecStart=/usr/bin/node /opt/codex-portal/src/telegram.mjs
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/codex-portal
+RestrictSUIDSGID=true
+KillMode=control-group
+TimeoutStopSec=30
+MemoryMax=700M
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

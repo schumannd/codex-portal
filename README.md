@@ -55,3 +55,16 @@ Open sessions resume their saved Codex thread lazily after service restart. SQLi
 Before considering deployment complete, install dependencies and verify the browser bundle path, run HTTP tests for unauthorized API access, enrollment races/replay, invalid origins, expired/revoked cookies, passkey registration/assertion verification, file limits, traversal prevention and concurrent prompts. Verify on actual iPhone/Mac hardware, then run a live Codex prompt, a file-reading prompt, answer reload, close, and restart/resume. Confirm TLS and firewall externally. Authentication and browser integration are not yet runtime-tested.
 
 Documentation: https://learn.chatgpt.com/docs/app-server and https://simplewebauthn.dev/docs/packages/server.
+
+
+## PyDavid Telegram bot
+
+The existing PyDavid identity (`@lunacy_berlin_bot`) runs as the persistent `codex-telegram` systemd service using long polling. The obsolete PythonAnywhere webhook was removed without dropping queued messages. Only the two configured users in private chats are accepted. The bot sends replies through the server's existing Codex authentication. Text messages are supported; voice/photos/files are not yet processed.
+
+Credentials and approved user IDs live only in root-readable `/etc/codex-telegram.env`, outside this repository. Configuration keys: `TELEGRAM_TOKEN`, `TELEGRAM_DAVID_ID`, `TELEGRAM_SAF_ID`, `TELEGRAM_IDLE_MINUTES`, and `TELEGRAM_MIN_MESSAGES`. Automatic rotation requires BOTH a positive idle threshold and a positive minimum incoming message count; both are currently zero pending the owner's requested trigger conditions. `/new` manually summarizes and rotates; `/status` reports state.
+
+David's `tg-david` sessions belong to the portal `owner` account; Saf's `tg-saf` sessions belong to a separate `telegram-saf` account. Each has separate accumulated memory at `/var/lib/codex-portal/data/telegram/tg-david/memory.txt` or `tg-saf/memory.txt`. Important facts are summarized and appended when rotating. More than 2,000 lines triggers compression to at most 100 lines. Earlier memory is backed up before replacement; full session event history is retained. The next conversation receives its own memory as context. Memory is stored in SQLite as the recovery source and atomically exported to text files. These are trusted users sharing one OS service account, not hostile-tenant isolation.
+
+Incoming updates are committed to SQLite before Telegram acknowledges them. Duplicate update IDs are ignored. A separate worker for each person serializes their prompts and preserves reply chunks across restarts. Delivery is at least once: a crash after Telegram accepts a reply but before the local delivery checkpoint may duplicate a reply. Interrupted generation can also be retried. Review `journalctl -u codex-telegram`; message bodies and credentials are not logged there. Back up `/var/lib/codex-portal` consistently. Restart the Telegram service to apply code or configuration changes.
+
+Validation covers sender/chat authorization, update deduplication, restart recovery, distinct accounts/sessions/memory, both rotation conditions, compression boundaries, and Unicode reply chunking. Live end-to-end Telegram conversation validation requires an approved user to send a message.

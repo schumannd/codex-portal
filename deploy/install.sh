@@ -31,4 +31,9 @@ caddy validate --config /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl enable --now codex-portal
 systemctl reload caddy
+if [[ -f /etc/codex-telegram.env ]]; then
+  install -m 644 deploy/codex-telegram.service /etc/systemd/system/codex-telegram.service
+  systemctl daemon-reload
+  systemctl enable --now codex-telegram
+fi
 printf 'Portal installed. Authenticate Codex as codexportal, then manually create an account and issue an enrollment code.\n'

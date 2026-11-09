@@ -7,7 +7,7 @@ export function openStore(directory = process.env.DATA_DIR || 'data') {
   process.umask(0o077);
   const data = resolve(directory); mkdirSync(data, { recursive: true });
   const db = new DatabaseSync(join(data, 'portal.sqlite'));
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL);
     CREATE TABLE IF NOT EXISTS enrollments(hash TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(id), expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS keys(id TEXT PRIMARY KEY, publicKey BLOB, counter INTEGER, transports TEXT, account TEXT NOT NULL REFERENCES accounts(id));
