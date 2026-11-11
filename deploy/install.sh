@@ -15,7 +15,7 @@ else
   npm install --omit=dev
 fi
 npm install -g @openai/codex
-chown -R root:root /opt/codex-portal
+chown -R codexportal:codexportal /opt/codex-portal
 chmod -R go-w /opt/codex-portal
 if [[ ! -f /etc/codex-portal.env ]]; then
   (umask 077; printf 'ORIGIN=https://app.schumann.com.de\n' > /etc/codex-portal.env)

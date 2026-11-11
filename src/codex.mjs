@@ -39,6 +39,6 @@ export class CodexSession {
     const r = await this.rpc(threadId ? 'thread/resume' : 'thread/start', threadId ? { ...params, threadId, excludeTurns: true } : params);
     this.threadId = r.thread.id; return this.threadId;
   }
-  prompt(text) { return this.rpc('turn/start', { threadId: this.threadId, input: [{ type: 'text', text }] }); }
+  prompt(text) { return this.rpc('turn/start', { threadId: this.threadId, input: [{ type: 'text', text }], ...(this.options.writableRoots?{sandboxPolicy:{type:'workspaceWrite',writableRoots:this.options.writableRoots,networkAccess:true}}:{}) }); }
   close() { this.proc.kill('SIGTERM'); const t = setTimeout(() => this.proc.kill('SIGKILL'), 3000); t.unref(); }
 }

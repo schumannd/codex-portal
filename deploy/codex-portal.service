@@ -9,6 +9,8 @@ User=codexportal
 Group=codexportal
 WorkingDirectory=/opt/codex-portal
 EnvironmentFile=/etc/codex-portal.env
+EnvironmentFile=-/etc/codex-github.env
+EnvironmentFile=-/etc/codex-telegram.env
 Environment=HOME=/var/lib/codex-portal
 Environment=DATA_DIR=/var/lib/codex-portal/data
 ExecStart=/usr/bin/node /opt/codex-portal/src/server.mjs
@@ -19,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/codex-portal
+ReadWritePaths=/var/lib/codex-portal /opt/codex-portal
 # Codex requires unprivileged user namespaces for its workspace sandbox.
 RestrictSUIDSGID=true
 KillMode=control-group

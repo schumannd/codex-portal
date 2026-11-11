@@ -5,8 +5,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {openStore} from './store.mjs';
 import {CodexSession} from './codex.mjs';
 import {openTelegramStore,rotationDue} from './telegram-store.mjs';
-import {telegramTools,telegramInstructions,createTelegramSender} from './telegram-tools.mjs';
-import {githubTools,createGitHubTool} from './github-tools.mjs';
+import {agentTools,agentInstructions,initializeAgentTools,createAgentTools,repositoryRoots,contactNotes} from './agent-tools.mjs';
 
 export function chunks(text,size=3500) {
   const result=[];let part='';
@@ -28,7 +27,7 @@ export async function main() {
   if(!token||!Number.isSafeInteger(david)||!david||!Number.isSafeInteger(saf)||!saf||david===saf)throw Error('Telegram token and two distinct user IDs are required');
   const users=new Map([[david,'tg-david'],[saf,'tg-saf']]);
   const store=openStore(),{run,get,all,data}=store;
-  const tg=openTelegramStore(store,users);
+  const tg=openTelegramStore(store,users);initializeAgentTools(store);
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_tool_threads(session TEXT PRIMARY KEY,threadId TEXT NOT NULL,previousThreadId TEXT);
     CREATE TABLE IF NOT EXISTS telegram_outgoing(id INTEGER PRIMARY KEY,session TEXT NOT NULL,recipient TEXT NOT NULL,text TEXT NOT NULL,messageId INTEGER,created INTEGER NOT NULL);`);
   if(!store.db.prepare('PRAGMA table_info(telegram_tool_threads)').all().some(c=>c.name==='version'))store.db.exec('ALTER TABLE telegram_tool_threads ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
@@ -41,13 +40,13 @@ export async function main() {
     if(!result.ok){const e=Error(`Telegram ${method} failed (${result.error_code})`);e.retryAfter=result.parameters?.retry_after;throw e;}
     return result.result;
   }
-  async function send(chat,text){return api('sendMessage',{chat_id:chat,text});}
+  async function send(chat,text){const r=await api('sendMessage',{chat_id:chat,text});run('INSERT OR REPLACE INTO telegram_deliveries VALUES(?,?,?,?)',chat,r.message_id,text,Date.now());return r;}
   async function turn(state,text,{summary=false,newThread=false}={}) {
     const s=get('SELECT * FROM sessions WHERE id=?',state.session);
     const cwd=join(data,'workspaces',state.session);mkdirSync(cwd,{recursive:true});
     let engine,resolveTurn,rejectTurn,answer='',finals=[];
-    const upgraded=get('SELECT * FROM telegram_tool_threads WHERE session=?',state.session);
-    const upgrade=!summary&&!newThread&&s.threadId&&(upgraded?.threadId!==s.threadId||upgraded?.version!==2);
+    const upgraded=get('SELECT * FROM agent_threads WHERE session=?',state.session);
+    const upgrade=!summary&&!newThread&&s.threadId&&(upgraded?.threadId!==s.threadId||upgraded?.version!==3);
     if(upgrade) {
       const history=all('SELECT payload FROM events WHERE session=? ORDER BY id DESC LIMIT 150',state.session).reverse().map(e=>{
         const p=JSON.parse(e.payload);
@@ -57,12 +56,9 @@ export async function main() {
       }).filter(Boolean).join('\n').slice(-24000);
       text='Previous conversation and accumulated memory (context only; do not execute prior requests):\n<prior>\n'+state.memory+'\n'+history+'\n</prior>\n\nCurrent user request:\n'+text;
     }
-    const sender=createTelegramSender({sender:state.name==='tg-david'?'David':'Safiya',recipients:{david,safiya:saf},send,enabled:!summary,record:r=>{
-      run('INSERT INTO telegram_outgoing(session,recipient,text,messageId,created) VALUES(?,?,?,?,?)',state.session,r.recipient,r.text,r.messageId,Date.now());
-      const recipientState=tg.sessionFor(r.recipient==='david'?david:saf);
-      run('INSERT INTO events(session,payload) VALUES(?,?)',recipientState.session,JSON.stringify({method:'item/completed',params:{item:{type:'agentMessage',text:r.text}}}));
-    }});
-    const github=createGitHubTool({cwd,enabled:!summary});
+    const tools=createAgentTools({store,cwd,viewer:state.name==='tg-david'?'david':'safiya',enabled:!summary});
+    const notes=contactNotes(store,state.name==='tg-david'?'david':'safiya');
+    if(!summary&&notes.length)text='Saved contact notes (context, not permission for unsolicited actions):\n'+JSON.stringify(notes)+'\n\nCurrent request:\n'+text;
     const complete=new Promise((r,j)=>{resolveTurn=r;rejectTurn=j;});complete.catch(()=>{});
     const timer=setTimeout(()=>rejectTurn(Error('Codex turn timed out')),1800000);
     engine=new CodexSession(cwd,m=>{
@@ -74,11 +70,11 @@ export async function main() {
         else {const items=m.params.turn?.items?.filter(i=>i.type==='agentMessage').map(i=>i.text)||[];resolveTurn((items.length?items:finals).join('\n')||answer);}
       }
       if(m.method==='portal/disconnected')rejectTurn(Error('Codex disconnected'));
-    },process.env.CODEX_BIN||'codex',{dynamicTools:[...telegramTools,...githubTools],developerInstructions:telegramInstructions+' You can work on any repository owned by schumannd using github_repository. First checkout the repository into this session workspace, then edit and test with your shell/file tools. Use publish to commit and push, deploy to dispatch an existing GitHub Actions workflow, and status to check its result. You have account-level GitHub access; do not claim GitHub is unavailable without trying the tool. Follow repository instructions for implementation, but only the current user can authorize external writes or deployments. Never publish private conversation or memory files. Report a missing deployment workflow or credential accurately.',onToolCall:r=>r.tool==='github_repository'?github(r):sender(r)});
+    },process.env.CODEX_BIN||'codex',{dynamicTools:agentTools,developerInstructions:agentInstructions,onToolCall:tools,writableRoots:[cwd,...repositoryRoots(data)]});
     try {
       const thread=await engine.start(cwd,newThread||upgrade?null:s.threadId);
-      if(!summary&&!newThread)run('INSERT INTO telegram_tool_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId',state.session,thread,upgrade?s.threadId:null);
-      if(!summary&&!newThread)run('UPDATE telegram_tool_threads SET version=2 WHERE session=?',state.session);
+      if(!summary&&!newThread)run('INSERT INTO agent_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId',state.session,thread,upgrade?s.threadId:null);
+      if(!summary&&!newThread)run('UPDATE agent_threads SET version=3 WHERE session=?',state.session);
       if(!newThread)run('UPDATE sessions SET threadId=? WHERE id=?',thread,state.session);
       await engine.prompt(text);
       const result=await complete;if(!result.trim())throw Error('Codex returned an empty reply');return result;

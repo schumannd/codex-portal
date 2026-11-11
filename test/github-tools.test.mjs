@@ -32,3 +32,9 @@ test('deployment dispatch reports requested rather than completed and passes wor
  assert.equal(r.success,true);assert.equal(JSON.parse(r.contentItems[0].text).dispatched,true);assert.ok(commands[0][1].includes('inputs[environment]=production'));
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+test('shared tools can use an explicitly approved existing repository outside the session directory',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'github-shared-'));mkdirSync(join(dir,'session'));mkdirSync(join(dir,'live'));const commands=[];
+ try{const h=createGitHubTool({cwd:join(dir,'session'),repositoryRoot:join(dir,'shared'),localRepositories:{'schumannd/test':join(dir,'live')},run:async(c,a)=>{commands.push(a);if(a.includes('get-url'))return 'git@github.com:schumannd/test.git';if(a.includes('--show-current'))return 'main';return '';}});
+ const r=await call(h,{action:'checkout',repository:'schumannd/test'});assert.equal(r.success,true);assert.equal(JSON.parse(r.contentItems[0].text).path,join(dir,'live'));assert.ok(!commands.some(a=>a.includes('clone')));
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
