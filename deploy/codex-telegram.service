@@ -9,6 +9,7 @@ User=codexportal
 Group=codexportal
 WorkingDirectory=/opt/codex-portal
 EnvironmentFile=/etc/codex-telegram.env
+EnvironmentFile=-/etc/codex-github.env
 Environment=HOME=/var/lib/codex-portal
 Environment=DATA_DIR=/var/lib/codex-portal/data
 ExecStart=/usr/bin/node /opt/codex-portal/src/telegram.mjs

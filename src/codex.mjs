@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 export class CodexSession {
   constructor(cwd, onEvent, command = process.env.CODEX_BIN || 'codex', options = {}) {
     this.options = options; this.pending = new Map(); this.seq = 0; this.onEvent = onEvent;
-    this.proc = spawn(command, ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env:Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('TELEGRAM_'))) });
+    this.proc = spawn(command, ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env:Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('TELEGRAM_')&&!['GH_TOKEN','GITHUB_TOKEN'].includes(key))) });
     this.proc.on('error', e => this.fail(e));
     this.proc.on('exit', () => this.fail(new Error('Codex process exited')));
     this.proc.stderr.on('data', () => {});

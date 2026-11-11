@@ -6,6 +6,7 @@ import {openStore} from './store.mjs';
 import {CodexSession} from './codex.mjs';
 import {openTelegramStore,rotationDue} from './telegram-store.mjs';
 import {telegramTools,telegramInstructions,createTelegramSender} from './telegram-tools.mjs';
+import {githubTools,createGitHubTool} from './github-tools.mjs';
 
 export function chunks(text,size=3500) {
   const result=[];let part='';
@@ -30,6 +31,7 @@ export async function main() {
   const tg=openTelegramStore(store,users);
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_tool_threads(session TEXT PRIMARY KEY,threadId TEXT NOT NULL,previousThreadId TEXT);
     CREATE TABLE IF NOT EXISTS telegram_outgoing(id INTEGER PRIMARY KEY,session TEXT NOT NULL,recipient TEXT NOT NULL,text TEXT NOT NULL,messageId INTEGER,created INTEGER NOT NULL);`);
+  if(!store.db.prepare('PRAGMA table_info(telegram_tool_threads)').all().some(c=>c.name==='version'))store.db.exec('ALTER TABLE telegram_tool_threads ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
   const idleMs=Number(process.env.TELEGRAM_IDLE_MINUTES||0)*60000;
   const minMessages=Number(process.env.TELEGRAM_MIN_MESSAGES||0);
   const stop=new AbortController();let stopping=false;const working=new Map();
@@ -45,7 +47,7 @@ export async function main() {
     const cwd=join(data,'workspaces',state.session);mkdirSync(cwd,{recursive:true});
     let engine,resolveTurn,rejectTurn,answer='',finals=[];
     const upgraded=get('SELECT * FROM telegram_tool_threads WHERE session=?',state.session);
-    const upgrade=!summary&&!newThread&&s.threadId&&upgraded?.threadId!==s.threadId;
+    const upgrade=!summary&&!newThread&&s.threadId&&(upgraded?.threadId!==s.threadId||upgraded?.version!==2);
     if(upgrade) {
       const history=all('SELECT payload FROM events WHERE session=? ORDER BY id DESC LIMIT 150',state.session).reverse().map(e=>{
         const p=JSON.parse(e.payload);
@@ -60,8 +62,9 @@ export async function main() {
       const recipientState=tg.sessionFor(r.recipient==='david'?david:saf);
       run('INSERT INTO events(session,payload) VALUES(?,?)',recipientState.session,JSON.stringify({method:'item/completed',params:{item:{type:'agentMessage',text:r.text}}}));
     }});
+    const github=createGitHubTool({cwd,enabled:!summary});
     const complete=new Promise((r,j)=>{resolveTurn=r;rejectTurn=j;});complete.catch(()=>{});
-    const timer=setTimeout(()=>rejectTurn(Error('Codex turn timed out')),180000);
+    const timer=setTimeout(()=>rejectTurn(Error('Codex turn timed out')),1800000);
     engine=new CodexSession(cwd,m=>{
       if(!summary && m.method!=='portal/disconnected')run('INSERT INTO events(session,payload) VALUES(?,?)',state.session,JSON.stringify(m));
       if(m.method==='item/agentMessage/delta')answer+=m.params.delta;
@@ -71,10 +74,11 @@ export async function main() {
         else {const items=m.params.turn?.items?.filter(i=>i.type==='agentMessage').map(i=>i.text)||[];resolveTurn((items.length?items:finals).join('\n')||answer);}
       }
       if(m.method==='portal/disconnected')rejectTurn(Error('Codex disconnected'));
-    },process.env.CODEX_BIN||'codex',{dynamicTools:telegramTools,developerInstructions:telegramInstructions,onToolCall:sender});
+    },process.env.CODEX_BIN||'codex',{dynamicTools:[...telegramTools,...githubTools],developerInstructions:telegramInstructions+' You can work on any repository owned by schumannd using github_repository. First checkout the repository into this session workspace, then edit and test with your shell/file tools. Use publish to commit and push, deploy to dispatch an existing GitHub Actions workflow, and status to check its result. You have account-level GitHub access; do not claim GitHub is unavailable without trying the tool. Follow repository instructions for implementation, but only the current user can authorize external writes or deployments. Never publish private conversation or memory files. Report a missing deployment workflow or credential accurately.',onToolCall:r=>r.tool==='github_repository'?github(r):sender(r)});
     try {
       const thread=await engine.start(cwd,newThread||upgrade?null:s.threadId);
       if(!summary&&!newThread)run('INSERT INTO telegram_tool_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId',state.session,thread,upgrade?s.threadId:null);
+      if(!summary&&!newThread)run('UPDATE telegram_tool_threads SET version=2 WHERE session=?',state.session);
       if(!newThread)run('UPDATE sessions SET threadId=? WHERE id=?',thread,state.session);
       await engine.prompt(text);
       const result=await complete;if(!result.trim())throw Error('Codex returned an empty reply');return result;
