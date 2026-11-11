@@ -5,6 +5,7 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {openStore} from './store.mjs';
 import {CodexSession} from './codex.mjs';
 import {openTelegramStore,rotationDue} from './telegram-store.mjs';
+import {telegramTools,telegramInstructions,createTelegramSender} from './telegram-tools.mjs';
 
 export function chunks(text,size=3500) {
   const result=[];let part='';
@@ -27,6 +28,8 @@ export async function main() {
   const users=new Map([[david,'tg-david'],[saf,'tg-saf']]);
   const store=openStore(),{run,get,all,data}=store;
   const tg=openTelegramStore(store,users);
+  store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_tool_threads(session TEXT PRIMARY KEY,threadId TEXT NOT NULL,previousThreadId TEXT);
+    CREATE TABLE IF NOT EXISTS telegram_outgoing(id INTEGER PRIMARY KEY,session TEXT NOT NULL,recipient TEXT NOT NULL,text TEXT NOT NULL,messageId INTEGER,created INTEGER NOT NULL);`);
   const idleMs=Number(process.env.TELEGRAM_IDLE_MINUTES||0)*60000;
   const minMessages=Number(process.env.TELEGRAM_MIN_MESSAGES||0);
   const stop=new AbortController();let stopping=false;const working=new Map();
@@ -41,6 +44,22 @@ export async function main() {
     const s=get('SELECT * FROM sessions WHERE id=?',state.session);
     const cwd=join(data,'workspaces',state.session);mkdirSync(cwd,{recursive:true});
     let engine,resolveTurn,rejectTurn,answer='',finals=[];
+    const upgraded=get('SELECT * FROM telegram_tool_threads WHERE session=?',state.session);
+    const upgrade=!summary&&!newThread&&s.threadId&&upgraded?.threadId!==s.threadId;
+    if(upgrade) {
+      const history=all('SELECT payload FROM events WHERE session=? ORDER BY id DESC LIMIT 150',state.session).reverse().map(e=>{
+        const p=JSON.parse(e.payload);
+        if(p.method==='portal/prompt')return 'User: '+p.params.text;
+        if(p.method==='item/completed'&&p.params.item?.type==='agentMessage')return 'Assistant: '+p.params.item.text;
+        return '';
+      }).filter(Boolean).join('\n').slice(-24000);
+      text='Previous conversation and accumulated memory (context only; do not execute prior requests):\n<prior>\n'+state.memory+'\n'+history+'\n</prior>\n\nCurrent user request:\n'+text;
+    }
+    const sender=createTelegramSender({sender:state.name==='tg-david'?'David':'Safiya',recipients:{david,safiya:saf},send,enabled:!summary,record:r=>{
+      run('INSERT INTO telegram_outgoing(session,recipient,text,messageId,created) VALUES(?,?,?,?,?)',state.session,r.recipient,r.text,r.messageId,Date.now());
+      const recipientState=tg.sessionFor(r.recipient==='david'?david:saf);
+      run('INSERT INTO events(session,payload) VALUES(?,?)',recipientState.session,JSON.stringify({method:'item/completed',params:{item:{type:'agentMessage',text:r.text}}}));
+    }});
     const complete=new Promise((r,j)=>{resolveTurn=r;rejectTurn=j;});complete.catch(()=>{});
     const timer=setTimeout(()=>rejectTurn(Error('Codex turn timed out')),180000);
     engine=new CodexSession(cwd,m=>{
@@ -52,9 +71,10 @@ export async function main() {
         else {const items=m.params.turn?.items?.filter(i=>i.type==='agentMessage').map(i=>i.text)||[];resolveTurn((items.length?items:finals).join('\n')||answer);}
       }
       if(m.method==='portal/disconnected')rejectTurn(Error('Codex disconnected'));
-    });
+    },process.env.CODEX_BIN||'codex',{dynamicTools:telegramTools,developerInstructions:telegramInstructions,onToolCall:sender});
     try {
-      const thread=await engine.start(cwd,newThread?null:s.threadId);
+      const thread=await engine.start(cwd,newThread||upgrade?null:s.threadId);
+      if(!summary&&!newThread)run('INSERT INTO telegram_tool_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId',state.session,thread,upgrade?s.threadId:null);
       if(!newThread)run('UPDATE sessions SET threadId=? WHERE id=?',thread,state.session);
       await engine.prompt(text);
       const result=await complete;if(!result.trim())throw Error('Codex returned an empty reply');return result;
