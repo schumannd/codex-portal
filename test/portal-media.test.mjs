@@ -42,13 +42,24 @@ test('complete Telegram bot -> local LLM API -> archived media -> session -> Tel
  bot=spawn(process.execPath,['test/fake-telegram.mjs'],{env,stdio:['ignore','ignore','pipe']});let errors='';bot.stderr.on('data',data=>{errors+=data;});
  const timeout=setTimeout(()=>bot.kill('SIGKILL'),15000);const [code]=await once(bot,'exit');clearTimeout(timeout);
  assert.equal(code,0,errors);
- const replies=JSON.parse(readFileSync(join(dir,'fake-deliveries.json')));assert.equal(replies.length,11);assert.deepEqual(replies[0],{chat_id:1,text:'rebooted!'});assert.ok(replies.slice(1).every(r=>r.text==='hello'&&r.chat_id===1));
+ const replies=JSON.parse(readFileSync(join(dir,'fake-deliveries.json')));
+ const {edited,documents}=JSON.parse(readFileSync(join(dir,'fake-attachments.json')));
+ assert.deepEqual(replies[0],{chat_id:1,text:'rebooted!'});
+ assert.equal([...replies,...edited].filter(r=>r.text==='hello'&&r.chat_id===1).length,10);
+ const progress=replies.filter(reply=>reply.reply_parameters?.message_id===12);
+ assert.equal(progress.length,1);
+ assert.match(progress[0].text,/Running a command/);
+ const statusID=101+replies.indexOf(progress[0]);
+ const updates=edited.filter(edit=>edit.message_id===statusID);
+ assert.ok(updates.some(edit=>edit.text.startsWith('Running a command')&&edit.text!==progress[0].text));
+ assert.equal(updates.at(-1).text,'Attachment ready');
+ assert.deepEqual(documents,[{name:'report.txt',bytes:'generated attachment',chat:'1',reply:{message_id:12,allow_sending_without_reply:true}}]);
  const store=openStore(dir);
  try {
- const rows=store.all('SELECT * FROM message_requests ORDER BY requestId');assert.equal(rows.length,10);assert.ok(rows.every(r=>r.response==='hello'));
+ const rows=store.all('SELECT * FROM message_requests ORDER BY requestId');assert.equal(rows.length,11);assert.equal(rows.filter(r=>r.response==='hello').length,10);
  const voice=rows.find(r=>r.requestId==='telegram-1');assert.equal(JSON.parse(readFileSync(join(voice.folder,'metadata.json'))).files[0].type,'voice');
  const album=rows.find(r=>r.requestId==='telegram-9');const meta=JSON.parse(readFileSync(join(album.folder,'metadata.json')));assert.equal(meta.files.length,2);assert.equal(meta.telegram.updates.length,2);assert.equal(meta.text,'Compare these');
- assert.equal(store.get("SELECT count(*) AS n FROM telegram_inbox WHERE status='done'").n,11);
+ assert.equal(store.get("SELECT count(*) AS n FROM telegram_inbox WHERE status='done'").n,12);
  const reply=rows.find(r=>r.requestId==='telegram-11');const quoted=JSON.parse(readFileSync(join(reply.folder,'metadata.json')));assert.equal(quoted.files[0].telegram.replyToMessageId,1);assert.equal(quoted.telegram.repliedTo[0].messageId,1);
  assert.equal(store.get('SELECT text FROM telegram_inbox WHERE id=5').text,'/new'); // caption is user content, never a bot command
  }finally{store.db.close();}

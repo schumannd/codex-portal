@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,readFileSync,rmSync,statSync,readdirSync} from 'node:fs';
+import {mkdtempSync,readFileSync,rmSync,statSync,readdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {openStore} from '../src/store.mjs';
@@ -37,6 +37,16 @@ test('validates payloads and isolates session archives',()=>{
  assert.throws(()=>archiveMessage(f.store,{...body,files:[{name:'bad',base64:'a='}]}),/encoding/);
  assert.throws(()=>archiveMessage(f.store,{...body,files:Array(21).fill(file('x','photo'))}),/Invalid message/);
  const a=archiveMessage(f.store,body),other=f.tg.sessionFor(2),b=archiveMessage(f.store,{...body,session:other.session});assert.notEqual(a.folder,b.folder);
+ }finally{f.close();}
+});
+test('resuming a message reads its original archive metadata from SQLite',()=>{
+ const f=fixture();
+ try {
+  const identity={session:f.state.session,requestId:'resume'};
+  const archived=archiveMessage(f.store,{...identity,text:'original',files:[file('photo.png','photo')]});
+  writeFileSync(join(archived.folder,'metadata.json'),JSON.stringify({...archived.metadata,text:'changed'}));
+  const resumed=archiveMessage(f.store,{...identity,resume:true});
+  assert.deepEqual(resumed.metadata,archived.metadata);
  }finally{f.close();}
 });
 test('media extraction supports photos, voice, video, video notes, animation, stickers, documents and albums',()=>{

@@ -3,7 +3,11 @@ import { createInterface } from 'node:readline';
 export class CodexSession {
   constructor(cwd, onEvent, command = process.env.CODEX_BIN || 'codex', options = {}) {
     this.options = options; this.pending = new Map(); this.seq = 0; this.onEvent = onEvent;
-    this.proc = spawn(options.sandboxCommand || command, options.sandboxCommand ? [...options.sandboxArgs, command, 'app-server'] : ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env:Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('TELEGRAM_')&&!['GH_TOKEN','GITHUB_TOKEN'].includes(key))) });
+    const args = [...(options.configArgs || []), 'app-server'];
+    const env = options.environment ?? Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => !key.startsWith('TELEGRAM_') && !['GH_TOKEN','GITHUB_TOKEN'].includes(key)));
+    this.proc = spawn(options.sandboxCommand || command, options.sandboxCommand ? [...options.sandboxArgs, command, ...args] : args,
+      { cwd, stdio: ['pipe', 'pipe', 'pipe'], env });
     this.proc.on('error', e => this.fail(e));
     this.proc.on('exit', () => this.fail(new Error('Codex process exited')));
     this.proc.stderr.on('data', () => {});
@@ -11,6 +15,7 @@ export class CodexSession {
       let msg; try { msg = JSON.parse(line); } catch { return; }
       if (msg.id !== undefined && msg.method) {
         if(msg.method==='item/tool/call' && this.options.onToolCall) {
+          this.onEvent({method:'portal/toolStarted',params:{tool:msg.params?.tool}});
           Promise.resolve().then(()=>this.options.onToolCall(msg.params)).then(result=>this.send({id:msg.id,result})).catch(()=>this.send({id:msg.id,result:{success:false,contentItems:[{type:'inputText',text:'Tool execution failed; no delivery confirmed.'}]}}));
         } else this.send({ id: msg.id, error: { code: -32601, message: 'Interactive request not supported; operation denied' } });
       } else if (msg.id !== undefined) {
@@ -19,7 +24,7 @@ export class CodexSession {
         msg.error ? p.reject(new Error(msg.error.message)) : p.resolve(msg.result);
       } else if (msg.method) this.onEvent(msg);
     });
-    this.ready = this.rpc('initialize', { clientInfo: { name: 'schumann_portal', version: '0.1.0' }, ...(options.dynamicTools?.length?{capabilities:{experimentalApi:true}}:{}) })
+    this.ready = this.rpc('initialize', { clientInfo: { name: 'schumann_portal', version: '0.1.0' }, ...((options.dynamicTools?.length||options.permissionProfile)?{capabilities:{experimentalApi:true}}:{}) })
       .then(() => this.send({ method: 'initialized', params: {} }));
     this.ready.catch(() => {});
   }
@@ -34,11 +39,11 @@ export class CodexSession {
   fail(error) { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); } this.pending.clear(); this.onEvent({ method: 'portal/disconnected', params: { message: error.message } }); }
   async start(cwd, threadId) {
     await this.ready;
-    const params = { cwd, approvalPolicy: 'never', sandbox: 'workspace-write', ...(this.options.developerInstructions?{developerInstructions:this.options.developerInstructions}:{}) };
+    const params = { cwd, approvalPolicy: 'never', ...(this.options.permissionProfile?{permissions:this.options.permissionProfile}:{sandbox:'workspace-write'}), ...(this.options.developerInstructions?{developerInstructions:this.options.developerInstructions}:{}) };
     if(!threadId && this.options.dynamicTools?.length)params.dynamicTools=this.options.dynamicTools;
     const r = await this.rpc(threadId ? 'thread/resume' : 'thread/start', threadId ? { ...params, threadId, excludeTurns: true } : params);
     this.threadId = r.thread.id; return this.threadId;
   }
-  prompt(text, attachments=[]) { return this.rpc('turn/start', { threadId: this.threadId, input: [{ type: 'text', text }, ...attachments], ...(this.options.writableRoots?{sandboxPolicy:{type:'workspaceWrite',writableRoots:this.options.writableRoots,networkAccess:true}}:{}) }); }
+  prompt(text, attachments=[]) { return this.rpc('turn/start', { threadId: this.threadId, input: [{ type: 'text', text }, ...attachments], ...(this.options.permissionProfile?{permissions:this.options.permissionProfile}:this.options.writableRoots?{sandboxPolicy:{type:'workspaceWrite',writableRoots:this.options.writableRoots,networkAccess:true}}:{}) }); }
   close() { this.proc.kill('SIGTERM'); const t = setTimeout(() => this.proc.kill('SIGKILL'), 3000); t.unref(); }
 }
