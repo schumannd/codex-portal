@@ -7,7 +7,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { openStore, hash } from './store.mjs';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { hubSession } from './hub-access.mjs';
-import { CodexSession } from './codex.mjs';
+import { CodexSession, telegramReasoningEffort } from './codex.mjs';
 import {agentTools,agentInstructions,conversationInstructions,initializeAgentTools,createAgentTools,repositoryRoots} from './agent-tools.mjs';
 
 process.umask(0o077);
@@ -112,7 +112,8 @@ const localApi=await listenMessageApi({store,runMessage:async (metadata,{setActi
   try {
     e=await engine(s);
     event(s.id,{method:'portal/prompt',params:{text:metadata.text,files:metadata.files.map(f=>f.name),folder:metadata.folder}});
-    return await sessionResponse(e,messagePrompt(metadata,outbox),{inputs:nativeMediaInputs(metadata.files),onActivity:setActivity,subscribe:observe=>{
+    const effort = metadata.source === 'telegram' ? telegramReasoningEffort : undefined;
+    return await sessionResponse(e,messagePrompt(metadata,outbox),{inputs:nativeMediaInputs(metadata.files),effort,onActivity:setActivity,subscribe:observe=>{
       if(!observers.has(s.id))observers.set(s.id,new Set());
       observers.get(s.id).add(observe);
       return ()=>{const set=observers.get(s.id);set?.delete(observe);if(!set?.size)observers.delete(s.id);};

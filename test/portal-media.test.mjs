@@ -12,7 +12,10 @@ import {openTelegramStore} from '../src/telegram-store.mjs';
 test('portal process receives media through its local API and runs an app-server turn',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'portal-media-'));let child;
  try {
- const store=openStore(dir),tg=openTelegramStore(store,new Map([[1,'tg-david'],[2,'tg-saf']])),state=tg.sessionFor(1);store.db.close();
+ const store=openStore(dir),tg=openTelegramStore(store,new Map([[1,'tg-david'],[2,'tg-saf']])),state=tg.sessionFor(1);
+ const localSession='local-session';
+ store.run('INSERT INTO sessions(id,account) VALUES(?,?)',localSession,state.account);
+ store.db.close();
  const socketPath=join(dir,'local.sock');
  child=spawn(process.execPath,['src/server.mjs'],{cwd:resolve('.'),env:{...process.env,PORT:'0',DATA_DIR:dir,LLM_API_SOCKET:socketPath,CODEX_BIN:resolve('test/fake-codex.mjs')},stdio:['ignore','pipe','pipe']});
  let logs='';child.stdout.on('data',data=>{logs+=data;});child.stderr.on('data',()=>{});
@@ -23,11 +26,16 @@ test('portal process receives media through its local API and runs an app-server
  const metadata=JSON.parse(readFileSync(join(result.folder,'metadata.json')));assert.equal(metadata.files.length,2);
  assert.equal(readFileSync(metadata.files[0].path,'utf8'),'sample audio');
  assert.deepEqual(await callMessageApi({session:state.session,requestId:body.requestId,resume:true},{socketPath}),result);
+ await callMessageApi({session:localSession,requestId:'local-control',text:'Hello',files:[]},{socketPath,timeout:10000});
  const check=openStore(dir);
  try {
- const event=check.all('SELECT payload FROM events WHERE session=?',state.session).map(r=>JSON.parse(r.payload)).find(e=>e.method==='test/prompt');
- assert.ok(event.params.input[0].text.includes(metadata.files[0].path));
- assert.deepEqual(event.params.input.slice(1),[{type:'localAudio',path:metadata.files[0].path},{type:'localImage',path:metadata.files[1].path}]);
+ const firstPrompt=session=>check.all('SELECT payload FROM events WHERE session=? ORDER BY id',session)
+   .map(row=>JSON.parse(row.payload)).find(event=>event.method==='test/prompt').params;
+ const telegramPrompt=firstPrompt(state.session);
+ assert.equal(telegramPrompt.effort,'high');
+ assert.ok(telegramPrompt.input[0].text.includes(metadata.files[0].path));
+ assert.deepEqual(telegramPrompt.input.slice(1),[{type:'localAudio',path:metadata.files[0].path},{type:'localImage',path:metadata.files[1].path}]);
+ assert.equal(Object.hasOwn(firstPrompt(localSession),'effort'),false);
  }finally{check.db.close();}
  }finally{if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}rmSync(dir,{recursive:true,force:true});}
 });

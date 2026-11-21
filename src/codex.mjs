@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+
+export const telegramReasoningEffort = 'high';
+
 export class CodexSession {
   constructor(cwd, onEvent, command = process.env.CODEX_BIN || 'codex', options = {}) {
     this.options = options; this.pending = new Map(); this.seq = 0; this.onEvent = onEvent;
@@ -44,6 +47,16 @@ export class CodexSession {
     const r = await this.rpc(threadId ? 'thread/resume' : 'thread/start', threadId ? { ...params, threadId, excludeTurns: true } : params);
     this.threadId = r.thread.id; return this.threadId;
   }
-  prompt(text, attachments=[]) { return this.rpc('turn/start', { threadId: this.threadId, input: [{ type: 'text', text }, ...attachments], ...(this.options.permissionProfile?{permissions:this.options.permissionProfile}:this.options.writableRoots?{sandboxPolicy:{type:'workspaceWrite',writableRoots:this.options.writableRoots,networkAccess:true}}:{}) }); }
+  prompt(text, attachments = [], effort) {
+    const params = {
+      threadId: this.threadId,
+      input: [{ type: 'text', text }, ...attachments],
+      effort,
+    };
+    const { permissionProfile, writableRoots } = this.options;
+    if (permissionProfile) params.permissions = permissionProfile;
+    else if (writableRoots) params.sandboxPolicy = { type: 'workspaceWrite', writableRoots, networkAccess: true };
+    return this.rpc('turn/start', params);
+  }
   close() { this.proc.kill('SIGTERM'); const t = setTimeout(() => this.proc.kill('SIGKILL'), 3000); t.unref(); }
 }

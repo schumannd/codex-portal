@@ -9,7 +9,7 @@ import {hubSession} from './hub-access.mjs';
 import {deliverArtifact} from './message-artifacts.mjs';
 import {telegramProgress} from './telegram-progress.mjs';
 import {telegramCommand,replyRoute,projectCommand} from './telegram-commands.mjs';
-import {CodexSession} from './codex.mjs';
+import {CodexSession,telegramReasoningEffort} from './codex.mjs';
 import {openTelegramStore,rotationDue,nextTelegramBatch} from './telegram-store.mjs';
 import {agentTools,agentInstructions,conversationInstructions,initializeAgentTools,createAgentTools,repositoryRoots,contactNotes} from './agent-tools.mjs';
 
@@ -122,7 +122,7 @@ export async function main({progressInterval=8000,progressDelay=500}={}) {
       if(!summary&&!newThread)run('INSERT INTO agent_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId',state.session,thread,upgrade?s.threadId:null);
       if(!summary&&!newThread)run('UPDATE agent_threads SET version=? WHERE session=?',version,state.session);
       if(!newThread)run('UPDATE sessions SET threadId=? WHERE id=?',thread,state.session);
-      await engine.prompt(text);
+      await engine.prompt(text, [], telegramReasoningEffort);
       const result=await complete;if(!result.trim())throw Error('Codex returned an empty reply');return result;
     }finally{clearTimeout(timer);engine.close();}
   }

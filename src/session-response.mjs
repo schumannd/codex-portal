@@ -22,7 +22,7 @@ export function activityLabel(item) {
 }
 
 // Subscribe before sending: app-server may complete the turn before its RPC reply arrives.
-export async function sessionResponse(engine,text,{inputs=[],subscribe,onActivity=()=>{},timeout=1800000}={}) {
+export async function sessionResponse(engine,text,{inputs=[],effort,subscribe,onActivity=()=>{},timeout=1800000}={}) {
   let finish,fail,delta='',finals=[],messages=[];
   const completed=new Promise((resolve,reject)=>{finish=resolve;fail=reject;});completed.catch(()=>{});
   const active = new Map();
@@ -54,5 +54,5 @@ export async function sessionResponse(engine,text,{inputs=[],subscribe,onActivit
   };
   const unsubscribe=subscribe(observe);
   const timer=setTimeout(()=>fail(Error('LLM turn timed out')),timeout);
-  try {await engine.prompt(text,inputs);return await completed;}finally{clearTimeout(timer);unsubscribe();}
+  try {await engine.prompt(text,inputs,effort);return await completed;}finally{clearTimeout(timer);unsubscribe();}
 }
