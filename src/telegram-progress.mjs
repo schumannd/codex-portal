@@ -1,24 +1,24 @@
-const frames = ['.', '..', '...', '…'];
-
 export function telegramProgress({initialMessageId, send, edit, activity, save, signal, active=()=>true, interval=8000, initialDelay=500}) {
   let messageId = initialMessageId;
   let scheduled;
   let running;
   let finished = false;
-  let frame = 0;
+  let lastText;
   let retryDelay = 0;
 
   async function update() {
     if (finished || signal?.aborted || !active()) return;
-    const phase = await activity().catch(() => null) || 'Preparing your request';
+    const phase = await activity().catch(() => null);
     if (finished || signal?.aborted || !active()) return;
-    const text = phase + frames[frame++ % frames.length];
+    const text = phase || lastText || 'Preparing your request';
+    if (text === lastText) return;
     if (messageId) await edit(messageId,text);
     else {
       const sent = await send(text);
       messageId = sent.message_id;
       save(messageId);
     }
+    lastText = text;
   }
 
   function schedule(delay) {

@@ -18,9 +18,13 @@ for await (const line of createInterface({input:process.stdin})) {
   const item={id:'write',type:'commandExecution',command:'example command'};
   console.log(JSON.stringify({method:'item/started',params:{item}}));
   await sleep(400);
+  console.log(JSON.stringify({method:'item/completed',params:{item}}));
+  const edit={id:'edit',type:'fileChange'};
+  console.log(JSON.stringify({method:'item/started',params:{item:edit}}));
+  await sleep(200);
   const outbox=prompt.match(/directly in (.+)\. Do not put drafts/)[1];
   writeFileSync(join(outbox,'report.txt'),'generated attachment');
-  console.log(JSON.stringify({method:'item/completed',params:{item}}));
+  console.log(JSON.stringify({method:'item/completed',params:{item:edit}}));
  }
  console.log(JSON.stringify({method:'item/agentMessage/delta',params:{delta:attachment?'Attachment ready':'hello'}}));
  console.log(JSON.stringify({method:'turn/completed',params:{turn:{status:'completed'}}}));

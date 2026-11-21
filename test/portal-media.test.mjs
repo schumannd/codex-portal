@@ -56,11 +56,10 @@ test('complete Telegram bot -> local LLM API -> archived media -> session -> Tel
  assert.equal([...replies,...edited].filter(r=>r.text==='hello'&&r.chat_id===1).length,10);
  const progress=replies.filter(reply=>reply.reply_parameters?.message_id===12);
  assert.equal(progress.length,1);
- assert.match(progress[0].text,/Running a command/);
+ assert.equal(progress[0].text,'Running a command');
  const statusID=101+replies.indexOf(progress[0]);
  const updates=edited.filter(edit=>edit.message_id===statusID);
- assert.ok(updates.some(edit=>edit.text.startsWith('Running a command')&&edit.text!==progress[0].text));
- assert.equal(updates.at(-1).text,'Attachment ready');
+ assert.deepEqual(updates.map(edit=>edit.text),['Editing files','Attachment ready']);
  assert.deepEqual(documents,[{name:'report.txt',bytes:'generated attachment',chat:'1',reply:{message_id:12,allow_sending_without_reply:true}}]);
  const store=openStore(dir);
  try {

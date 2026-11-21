@@ -80,7 +80,7 @@ The Telegram agent also has a `github_repository` dynamic tool for all repositor
 
 ### Progress, files, projects, and invites
 
-- PyDavid posts one status reply for longer requests. It updates the activity and animated dots about every eight seconds, then edits that message into the answer.
+- PyDavid posts one status reply for longer requests. It checks the activity about every eight seconds, edits the status when the activity changes, and replaces it with the answer when the turn finishes.
 - Ask PyDavid to generate a file to receive it as a Telegram attachment. Each reply can include up to ten files of 50 MB each.
 - Type `/project NAME` in the main chat to create or resume a named conversation. Use `/projects` to switch between saved projects and the general conversation. Each project keeps its own Codex session. In the admin chat, names and aliases from the configured hub can also resolve the project’s repository. When Telegram private-chat topics are enabled for the bot, PyDavid can also open projects in native tabs.
 - In the admin chat, type `/invite NAME` to create a single-use link that expires after 24 hours. Share the link privately with the intended member. `/members` shows member and open invite IDs. Use `/revoke USER_ID` to remove a member's access or `/revoke invite INVITE_ID` to cancel an open link.
