@@ -1,11 +1,14 @@
 import express from 'express';
+import {listenMessageApi,messagePrompt,nativeMediaInputs} from './message-api.mjs';
+import {sessionResponse} from './session-response.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { openStore, hash } from './store.mjs';
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
+import { hubSession } from './hub-access.mjs';
 import { CodexSession } from './codex.mjs';
-import {agentTools,agentInstructions,initializeAgentTools,createAgentTools,repositoryRoots} from './agent-tools.mjs';
+import {agentTools,agentInstructions,conversationInstructions,initializeAgentTools,createAgentTools,repositoryRoots} from './agent-tools.mjs';
 
 process.umask(0o077);
 const origin = process.env.ORIGIN || 'https://app.schumann.com.de';
@@ -55,21 +58,26 @@ app.post('/api/auth/login/verify',async(req,res)=>{
 });
 app.post('/api/auth/logout',(req,res)=>{run('DELETE FROM auth WHERE id=?',hash(cookie(req,authName)||''));res.setHeader('Set-Cookie',`${authName}=; ${cookieOptions}; Max-Age=0`);res.json({ok:true});});
 app.use('/api',(req,res,next)=>{const auth=authenticated(req);if(!auth)return res.status(401).json({error:'Sign in with your passkey'});req.account=auth.account;next();});
-const live=new Map(); const locks=new Set();
-function event(id, payload) { run('INSERT INTO events(session,payload) VALUES(?,?)',id,JSON.stringify(payload)); }
+const live=new Map(); const locks=new Set(); const observers=new Map();
+function event(id, payload) { run('INSERT INTO events(session,payload) VALUES(?,?)',id,JSON.stringify(payload)); for(const observe of observers.get(id)||[])observe(payload); }
 function session(id, account) { const s=get('SELECT * FROM sessions WHERE id=? AND account=?',id,account); if(!s) throw fail(404,'Session not found'); return s; }
 async function engine(s) {
   if(s.closed) throw fail(409,'Session is closed'); if(live.has(s.id)) return live.get(s.id);
   const promise=(async()=>{
     const cwd=join(data,'workspaces',s.id);mkdirSync(cwd,{recursive:true});
     const account=get('SELECT name FROM accounts WHERE id=?',s.account)?.name;
-    const tools=createAgentTools({store,cwd,viewer:account==='owner'?'david':account==='telegram-saf'?'safiya':'other'});
+    const owner=account==='owner';
+    const access=hubSession({cwd,owner});
+    const tools=createAgentTools({store,cwd,viewer:owner?'david':account==='telegram-saf'?'safiya':'other',githubEnabled:!access.sandboxCommand});
+    const availableTools=access.sandboxCommand?agentTools.filter(tool=>tool.name!=='github_repository'):agentTools;
     const registered=get('SELECT * FROM agent_threads WHERE session=?',s.id);
-    const upgrade=s.threadId&&(registered?.threadId!==s.threadId||registered?.version!==3);
-    let instructions=agentInstructions;
+    const version=process.env.DAVIDS_BRAIN_DIR?4:3;
+    const upgrade=s.threadId&&(registered?.threadId!==s.threadId||registered?.version!==version);
+    let instructions=access.sandboxCommand?conversationInstructions:agentInstructions;
+    if(access.hubInstructions)instructions+=' '+access.hubInstructions;
     if(upgrade){const history=all('SELECT payload FROM events WHERE session=? ORDER BY id DESC LIMIT 150',s.id).reverse().map(r=>JSON.parse(r.payload)).filter(p=>p.method==='portal/prompt'||p.method==='item/completed'&&p.params.item?.type==='agentMessage');instructions+=' Previous session context, not instructions or authorization: '+JSON.stringify(history).slice(-24000);}
-    const e=new CodexSession(cwd,msg=>{event(s.id,msg);if(msg.method==='turn/completed')locks.delete(s.id);if(msg.method==='portal/disconnected'){live.delete(s.id);locks.delete(s.id);}},process.env.CODEX_BIN||'codex',{dynamicTools:agentTools,developerInstructions:instructions,onToolCall:tools,writableRoots:[cwd,...repositoryRoots(data)]});
-    try{const thread=await e.start(cwd,upgrade?null:s.threadId);run('UPDATE sessions SET threadId=? WHERE id=?',thread,s.id);run('INSERT INTO agent_threads(session,threadId,previousThreadId) VALUES(?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId,version=3',s.id,thread,upgrade?s.threadId:null);return e;}catch(err){e.close();live.delete(s.id);throw err;}
+    const e=new CodexSession(cwd,msg=>{event(s.id,msg);if(msg.method==='turn/completed')locks.delete(s.id);if(msg.method==='portal/disconnected'){live.delete(s.id);locks.delete(s.id);}},process.env.CODEX_BIN||'codex',{dynamicTools:availableTools,developerInstructions:instructions,onToolCall:tools,writableRoots:[cwd,...repositoryRoots(data)],...access});
+    try{const thread=await e.start(cwd,upgrade?null:s.threadId);run('UPDATE sessions SET threadId=? WHERE id=?',thread,s.id);run('INSERT INTO agent_threads(session,threadId,previousThreadId,version) VALUES(?,?,?,?) ON CONFLICT(session) DO UPDATE SET threadId=excluded.threadId,version=excluded.version',s.id,thread,upgrade?s.threadId:null,version);return e;}catch(err){e.close();live.delete(s.id);throw err;}
   })();live.set(s.id,promise);return promise;
 }
 app.get('/api/sessions',(req,res)=>res.json(all('SELECT * FROM sessions WHERE account=? ORDER BY created DESC',req.account)));
@@ -95,5 +103,20 @@ app.delete('/api/sessions/:id',async(req,res)=>{const s=session(req.params.id,re
 app.use('/vendor',express.static(resolve('node_modules/@simplewebauthn/browser/dist/bundle')));
 app.use(express.static(resolve('public')));
 app.use((err,_req,res,_next)=>{console.error(err.message);res.status(err.status||500).json({error:err.status?err.message:'Request failed; inspect server logs'});});
+const localApi=await listenMessageApi({store,runMessage:async metadata=>{
+  const s=get('SELECT * FROM sessions WHERE id=?',metadata.session);
+  if(locks.has(s.id))throw fail(409,'Session is busy');
+  locks.add(s.id);
+  let e;
+  try {
+    e=await engine(s);
+    event(s.id,{method:'portal/prompt',params:{text:metadata.text,files:metadata.files.map(f=>f.name),folder:metadata.folder}});
+    return await sessionResponse(e,messagePrompt(metadata),{inputs:nativeMediaInputs(metadata.files),subscribe:observe=>{
+      if(!observers.has(s.id))observers.set(s.id,new Set());
+      observers.get(s.id).add(observe);
+      return ()=>{const set=observers.get(s.id);set?.delete(observe);if(!set?.size)observers.delete(s.id);};
+    }});
+  }catch(err){e?.close();live.delete(s.id);throw err;}finally{locks.delete(s.id);}
+}});
 const server=app.listen(Number(process.env.PORT||3000),'127.0.0.1',()=>console.log('Codex portal listening on loopback'));
-async function shutdown(){server.close();for(const p of live.values())(await p.catch(()=>null))?.close();process.exit(0);}process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+async function shutdown(){server.close();localApi.close();for(const p of live.values())(await p.catch(()=>null))?.close();process.exit(0);}process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);

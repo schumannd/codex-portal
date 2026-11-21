@@ -35,3 +35,13 @@ test('memory appends until exceeding 2000 lines, then requires a summary of at m
  await assert.rejects(mergeMemory('fact\n'.repeat(2000),'new',async()=>('too long\n'.repeat(101))),/1–100/);
 });
 test('Telegram reply chunks retain Unicode characters',()=>{const text='a😀'.repeat(3000);const parts=chunks(text);assert.equal(parts.join(''),text);assert.ok(parts.every(p=>p.length<=3500&&!/[\uD800-\uDBFF]$/.test(p)));});
+test('voice and audio metadata survive ingestion and restart with captions',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'telegram-audio-'));let s=openStore(dir);
+ try {
+ let tg=openTelegramStore(s,users);
+ const voice=update(30);delete voice.message.text;voice.message.voice={file_id:'voice',mime_type:'audio/ogg'};
+ const audio=update(31,2);delete audio.message.text;audio.message.caption='Listen';audio.message.audio={file_id:'audio',file_name:'song.mp3'};
+ tg.ingest([voice,audio,voice]);s.db.close();s=openStore(dir);tg=openTelegramStore(s,users);
+ const jobs=tg.pending();assert.equal(jobs.length,2);assert.equal(JSON.parse(jobs[0].audio).file_id,'voice');assert.equal(jobs[1].text,'Listen');assert.equal(JSON.parse(jobs[1].audio).file_id,'audio');
+ }finally{s.db.close();rmSync(dir,{recursive:true,force:true});}
+});

@@ -1,3 +1,4 @@
+import {telegramMedia} from './telegram-media.mjs';
 import {randomUUID} from 'node:crypto';
 import {mkdirSync,writeFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
@@ -15,6 +16,10 @@ export function openTelegramStore(store, users) {
     CREATE TABLE IF NOT EXISTS telegram_inbox(id INTEGER PRIMARY KEY, user INTEGER NOT NULL, chat INTEGER NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', reply TEXT, sent INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS telegram_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
   for(const name of ['receivedAt','messageId','replyToMessageId'])if(!db.prepare('PRAGMA table_info(telegram_inbox)').all().some(c=>c.name===name))db.exec(`ALTER TABLE telegram_inbox ADD COLUMN ${name} INTEGER`);
+  if(!db.prepare('PRAGMA table_info(telegram_inbox)').all().some(c=>c.name==='audio'))db.exec('ALTER TABLE telegram_inbox ADD COLUMN audio TEXT');
+  if(!db.prepare('PRAGMA table_info(telegram_inbox)').all().some(c=>c.name==='attachmentId'))db.exec('ALTER TABLE telegram_inbox ADD COLUMN attachmentId TEXT');
+  for(const name of ['media','metadata','mediaGroupId','sessionId'])if(!db.prepare('PRAGMA table_info(telegram_inbox)').all().some(c=>c.name===name))db.exec(`ALTER TABLE telegram_inbox ADD COLUMN ${name} TEXT`);
+  if(!db.prepare('PRAGMA table_info(telegram_inbox)').all().some(c=>c.name==='ingestedAt'))db.exec('ALTER TABLE telegram_inbox ADD COLUMN ingestedAt INTEGER');
   for(const [id,name] of users) {
     const accountName=name==='tg-david'?'owner':'telegram-saf';
     const account=get('SELECT id FROM accounts WHERE name=?',accountName)?.id || store.createAccount(accountName);
@@ -27,7 +32,7 @@ export function openTelegramStore(store, users) {
     try {
       for(const u of updates) {
         const m=authorizedMessage(u,users);
-        if(m)run('INSERT OR IGNORE INTO telegram_inbox(id,user,chat,text,receivedAt,messageId,replyToMessageId) VALUES(?,?,?,?,?,?,?)',u.update_id,m.from.id,m.chat.id,m.text||m.caption||'[Non-text message]',m.date?m.date*1000:Date.now(),m.message_id??null,m.reply_to_message?.message_id??null);
+        if(m)run('INSERT OR IGNORE INTO telegram_inbox(id,user,chat,text,receivedAt,messageId,replyToMessageId,audio,media,metadata,mediaGroupId,ingestedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',u.update_id,m.from.id,m.chat.id,m.text||m.caption||'[Non-text message]',m.date?m.date*1000:Date.now(),m.message_id??null,m.reply_to_message?.message_id??null,(m.voice||m.audio||m.document)?JSON.stringify(m.voice||m.audio||m.document):null,JSON.stringify(telegramMedia(m)),JSON.stringify(u),m.media_group_id||null,Date.now());
         run("INSERT INTO telegram_settings VALUES('offset',?) ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT)",String(u.update_id+1));
       }
       db.exec('COMMIT');
@@ -61,4 +66,14 @@ export function openTelegramStore(store, users) {
     exportMemory(user);
   }
   return {ingest,sessionFor,exportMemory,commitMemory,offset:()=>Number(get("SELECT value FROM telegram_settings WHERE key='offset'")?.value||0),pending:()=>all("SELECT * FROM telegram_inbox WHERE status IN ('pending','ready') ORDER BY id"),state:user=>get('SELECT * FROM telegram_users WHERE user=?',user)};
+}
+
+export function nextTelegramBatch(pending,user,now=Date.now()) {
+  const first=pending.find(j=>j.user===user);
+  if(!first)return [];
+  if(first.status==='ready'||!first.mediaGroupId)return [first];
+  const jobs=pending.filter(j=>j.user===user&&j.chat===first.chat&&j.mediaGroupId===first.mediaGroupId&&j.status!=='ready');
+  // Albums arrive as separate updates, sometimes across polling responses.
+  if(jobs.some(j=>now-(j.ingestedAt||0)<1500))return [];
+  return jobs;
 }
